@@ -43,3 +43,8 @@ venv/
 *.bak
 Thumbs.db
 Desktop.ini
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec

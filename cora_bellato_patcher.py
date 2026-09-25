@@ -32,12 +32,27 @@ import shutil
 import struct
 import hashlib
 import argparse
+import queue
+import threading
 from typing import Dict, List, Tuple, Set, Optional, Any
 
 if sys.platform == 'win32':
+    import ctypes
+    # If launched with CLI arguments, attach to parent console so terminal output works
+    if len(sys.argv) > 1 and "--gui" not in sys.argv:
+        try:
+            if ctypes.windll.kernel32.AttachConsole(-1):
+                if sys.stdout is None or getattr(sys.stdout, 'fileno', lambda: -1)() < 0:
+                    sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+                if sys.stderr is None or getattr(sys.stderr, 'fileno', lambda: -1)() < 0:
+                    sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
-        sys.stderr.reconfigure(encoding='utf-8')
+        if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding='utf-8')
+        if sys.stderr is not None and hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding='utf-8')
     except Exception:
         pass
 
@@ -394,10 +409,10 @@ def combine_msh(base_msh: bytes, addon_msh: bytes, filter_fn) -> bytes:
 
 
 class BackupManager:
-    def __init__(self, base_dir: str = BASE_DIR, backup_dir: str = BACKUP_DIR):
+    def __init__(self, base_dir: str = BASE_DIR, backup_dir: Optional[str] = None):
         self.base_dir = base_dir
-        self.backup_dir = backup_dir
-        self.manifest_file = BACKUP_MANIFEST
+        self.backup_dir = backup_dir if backup_dir else os.path.join(base_dir, "_ModBackup")
+        self.manifest_file = os.path.join(self.backup_dir, "backup_manifest.json")
 
     def load_manifest(self) -> Dict[str, Any]:
         if os.path.exists(self.manifest_file):
@@ -502,9 +517,10 @@ class BackupManager:
             for err in errors[:10]:
                 print(f"    - {err}")
 
-        if os.path.exists(CACHE_DIR):
+        cache_dir = os.path.join(self.base_dir, "_ModCache")
+        if os.path.exists(cache_dir):
             print("[*] Clearing mod cache _ModCache/...")
-            shutil.rmtree(CACHE_DIR, ignore_errors=True)
+            shutil.rmtree(cache_dir, ignore_errors=True)
 
         return restored, errors
 
@@ -1960,7 +1976,7 @@ class AssetSwapper:
             stats["bone"] += 1
 
         print("[*] Applying adapted base skeletons (validator-compliant race proportions)...")
-        SkeletonAdapter.apply_adapted_skeletons(self.base_dir, BACKUP_DIR)
+        SkeletonAdapter.apply_adapted_skeletons(self.base_dir, self.backup_mgr.backup_dir)
         stats["bone"] += 8
 
         # 6. Ani RFS
@@ -2274,11 +2290,38 @@ class AssetSwapper:
 
 
 class CacheManager:
-    def __init__(self, base_dir: str = BASE_DIR, cache_dir: str = CACHE_DIR):
+    def __init__(self, base_dir: str = BASE_DIR, cache_dir: Optional[str] = None):
         self.base_dir = base_dir
-        self.cache_dir = cache_dir
+        self.cache_dir = cache_dir if cache_dir else os.path.join(base_dir, "_ModCache")
 
-    def build_cache_from_active_mod(self, backup_manifest_path: str = BACKUP_MANIFEST) -> int:
+    def restore_from_cache(self) -> Tuple[int, List[str]]:
+        if not os.path.exists(self.cache_dir):
+            print(f"[-] Mod cache not found at {self.cache_dir}. Run --apply first.")
+            return 0, ["_ModCache not found"]
+
+        print(f"[*] Restoring mod files from {self.cache_dir} into {self.base_dir}...")
+        restored = 0
+        errors = []
+        for root, _, files in os.walk(self.cache_dir):
+            for f in files:
+                src_path = os.path.join(root, f)
+                rel_path = os.path.relpath(src_path, self.cache_dir)
+                dst_path = os.path.join(self.base_dir, rel_path)
+                try:
+                    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                    shutil.copy2(src_path, dst_path)
+                    restored += 1
+                except Exception as e:
+                    errors.append(f"{rel_path}: {e}")
+
+        print(f"[+] Successfully restored {restored} files from _ModCache in 1 second.")
+        if errors:
+            print(f"[!] {len(errors)} warnings during restore.")
+        return restored, errors
+
+    def build_cache_from_active_mod(self, backup_manifest_path: Optional[str] = None) -> int:
+        if backup_manifest_path is None:
+            backup_manifest_path = os.path.join(self.base_dir, "_ModBackup", "backup_manifest.json")
         if not os.path.exists(backup_manifest_path):
             print("[-] Backup manifest not found. Cannot populate cache.")
             return 0
@@ -2387,7 +2430,7 @@ def is_mod_applied(base_dir: str = BASE_DIR) -> bool:
     """Check if the mod is active by inspecting DEFAULTBF.RFS mesh content.
     When mod is applied, DEFAULTBF.RFS contains Cora meshes (different entry sizes)."""
     rfs_path = os.path.join(base_dir, "Character", "Player", "Mesh", "DEFAULTBF.RFS")
-    backup_rfs = os.path.join(BACKUP_DIR, "Character", "Player", "Mesh", "DEFAULTBF.RFS")
+    backup_rfs = os.path.join(base_dir, "_ModBackup", "Character", "Player", "Mesh", "DEFAULTBF.RFS")
     if os.path.exists(rfs_path) and os.path.exists(backup_rfs):
         return os.path.getsize(rfs_path) != os.path.getsize(backup_rfs)
     return False
@@ -2398,6 +2441,8 @@ def verify_installation(base_dir: str = BASE_DIR) -> bool:
     print(" Verifying RF Online Cora <-> Bellato Modification State")
     print("====================================================================")
 
+    backup_dir = os.path.join(base_dir, "_ModBackup")
+    cache_dir = os.path.join(base_dir, "_ModCache")
     all_passed = True
 
     print("[*] Checking safety invariants (Animus, MAU, Skills)...")
@@ -2672,7 +2717,7 @@ def verify_installation(base_dir: str = BASE_DIR) -> bool:
 
     # Check Shared Texture RFS (RFMASTER.RFS in Tex/)
     tex_rfmaster = os.path.join(base_dir, "Character", "Player", "Tex", "RFMASTER.RFS")
-    bak_tex_rfmaster = os.path.join(BACKUP_DIR, "Character", "Player", "Tex", "RFMASTER.RFS")
+    bak_tex_rfmaster = os.path.join(backup_dir, "Character", "Player", "Tex", "RFMASTER.RFS")
     if os.path.exists(tex_rfmaster) and os.path.exists(bak_tex_rfmaster):
         try:
             entries_cur, _ = RFSHandler.read_rfs(tex_rfmaster)
@@ -2758,7 +2803,7 @@ def verify_installation(base_dir: str = BASE_DIR) -> bool:
 
     # Check SPR Rank and Race badges:
     spr_ru_common = os.path.join(base_dir, "SpriteImage", "ru-ru", "common.spr")
-    bak_ru_common = os.path.join(BACKUP_DIR, "SpriteImage", "ru-ru", "common.spr")
+    bak_ru_common = os.path.join(backup_dir, "SpriteImage", "ru-ru", "common.spr")
     if os.path.exists(spr_ru_common) and os.path.exists(bak_ru_common):
         try:
             with open(spr_ru_common, "rb") as f1, open(bak_ru_common, "rb") as f2:
@@ -2793,7 +2838,7 @@ def verify_installation(base_dir: str = BASE_DIR) -> bool:
 
     for c_rel in ["SpriteImage/common.spr", "SpriteImage/common/common.spr", "SpriteImage/common/common/common.spr"]:
         spr_c = os.path.join(base_dir, c_rel)
-        bak_c = os.path.join(BACKUP_DIR, c_rel)
+        bak_c = os.path.join(backup_dir, c_rel)
         if os.path.exists(spr_c) and os.path.exists(bak_c):
             try:
                 with open(spr_c, "rb") as f1, open(bak_c, "rb") as f2:
@@ -2813,7 +2858,7 @@ def verify_installation(base_dir: str = BASE_DIR) -> bool:
 
     for pvp_rel in ["SpriteImage/common/pvp.spr", "SpriteImage/common/common/pvp.spr"]:
         spr_pvp = os.path.join(base_dir, pvp_rel)
-        bak_pvp = os.path.join(BACKUP_DIR, pvp_rel)
+        bak_pvp = os.path.join(backup_dir, pvp_rel)
         if os.path.exists(spr_pvp) and os.path.exists(bak_pvp):
             try:
                 with open(spr_pvp, "rb") as f1, open(bak_pvp, "rb") as f2:
@@ -2832,7 +2877,7 @@ def verify_installation(base_dir: str = BASE_DIR) -> bool:
 
     for ci_rel in ["SpriteImage/common/charinfo.spr", "SpriteImage/en-gb/charinfo.spr"]:
         spr_charinfo = os.path.join(base_dir, ci_rel)
-        bak_charinfo = os.path.join(BACKUP_DIR, ci_rel)
+        bak_charinfo = os.path.join(backup_dir, ci_rel)
         if os.path.exists(spr_charinfo) and os.path.exists(bak_charinfo):
             try:
                 with open(spr_charinfo, "rb") as f1, open(bak_charinfo, "rb") as f2:
@@ -2849,7 +2894,7 @@ def verify_installation(base_dir: str = BASE_DIR) -> bool:
             except Exception as e:
                 print(f"    [!] Error verifying {ci_rel}: {e}")
 
-    cache_ready = os.path.isdir(CACHE_DIR) and len(os.listdir(CACHE_DIR)) > 0
+    cache_ready = os.path.isdir(cache_dir) and len(os.listdir(cache_dir)) > 0
     bat_ready = os.path.exists(os.path.join(base_dir, "Apply-Mod.bat"))
     ps1_ready = os.path.exists(os.path.join(base_dir, "Apply-Mod.ps1"))
     print(f"[*] Local _ModCache ready: {cache_ready}")
@@ -2862,13 +2907,513 @@ def verify_installation(base_dir: str = BASE_DIR) -> bool:
     return all_passed and mod_active
 
 
+class GuiOutputRedirector:
+    def __init__(self, log_queue: queue.Queue):
+        self.log_queue = log_queue
+
+    def write(self, text: str):
+        if text:
+            self.log_queue.put(text)
+
+    def flush(self):
+        pass
+
+
+class PatcherGUI:
+    def __init__(self, initial_dir: Optional[str] = None):
+        import tkinter as tk
+        from tkinter import ttk, filedialog, messagebox
+        import tkinter.scrolledtext as scrolledtext
+
+        self.tk = tk
+        self.ttk = ttk
+        self.filedialog = filedialog
+        self.messagebox = messagebox
+
+        self.root = tk.Tk()
+        self.root.title("RF Online 4.75 — Модификатор Расы: Cora ⇄ Bellato")
+        self.root.geometry("860x720")
+        self.root.minsize(760, 580)
+        self.root.configure(bg="#181825")
+
+        icon_path = self._find_icon()
+        if icon_path and os.path.exists(icon_path):
+            try:
+                self.root.iconbitmap(icon_path)
+            except Exception:
+                pass
+
+        self.log_queue = queue.Queue()
+        self.is_busy = False
+
+        self.game_dir_var = tk.StringVar(value=self._detect_game_dir(initial_dir))
+        self.status_text_var = tk.StringVar(value="Проверка...")
+
+        self._build_ui()
+        self._refresh_status()
+
+        # Start periodic log queue polling
+        self.root.after(100, self._process_log_queue)
+
+    def _find_icon(self) -> Optional[str]:
+        bundle_dir = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+        for loc in [
+            os.path.join(bundle_dir, "icon.ico"),
+            os.path.join(os.path.dirname(sys.executable), "icon.ico"),
+            os.path.join(os.getcwd(), "icon.ico"),
+            "D:\\rfonline-vkplay-bellato-cora-mod\\icon.ico"
+        ]:
+            if os.path.exists(loc):
+                return loc
+        return None
+
+    def _detect_game_dir(self, hint: Optional[str] = None) -> str:
+        candidates = []
+        if hint and os.path.isdir(hint):
+            candidates.append(hint)
+        candidates.extend([
+            os.path.dirname(os.path.abspath(sys.executable)),
+            os.getcwd(),
+            r"N:\Games\RF Online",
+            r"C:\Games\RF Online",
+            r"D:\Games\RF Online",
+            r"C:\Program Files (x86)\Innova\RF Online",
+            r"C:\4game\RF Online",
+        ])
+        for c in candidates:
+            if not os.path.isdir(c):
+                continue
+            if os.path.isdir(os.path.join(c, "Character")) and os.path.isdir(os.path.join(c, "DataTable")):
+                return os.path.abspath(c)
+            if os.path.isfile(os.path.join(c, "RF_Online.bin")) or os.path.isfile(os.path.join(c, "RF_Online.exe")):
+                return os.path.abspath(c)
+        return os.path.abspath(candidates[0]) if candidates else os.getcwd()
+
+    def _build_ui(self):
+        # Header Frame
+        header = self.tk.Frame(self.root, bg="#1e1e2e", padx=20, pady=16)
+        header.pack(fill="x", padx=14, pady=(14, 8))
+
+        title_label = self.tk.Label(
+            header,
+            text="RF Online 4.75 — Cora ⇄ Bellato Mod Manager",
+            font=("Segoe UI", 15, "bold"),
+            fg="#cdd6f4",
+            bg="#1e1e2e"
+        )
+        title_label.pack(anchor="w")
+
+        sub_label = self.tk.Label(
+            header,
+            text="Полная взаимная замена моделей, брони, анимаций, эффектов, звуков и спрайтов",
+            font=("Segoe UI", 9),
+            fg="#a6adc8",
+            bg="#1e1e2e"
+        )
+        sub_label.pack(anchor="w", pady=(2, 0))
+
+        # Path & Status Card
+        card = self.tk.Frame(self.root, bg="#1e1e2e", padx=20, pady=14)
+        card.pack(fill="x", padx=14, pady=6)
+
+        path_lbl = self.tk.Label(
+            card,
+            text="Папка с игрой RF Online:",
+            font=("Segoe UI", 9, "bold"),
+            fg="#cdd6f4",
+            bg="#1e1e2e"
+        )
+        path_lbl.pack(anchor="w", pady=(0, 4))
+
+        path_row = self.tk.Frame(card, bg="#1e1e2e")
+        path_row.pack(fill="x", pady=(0, 10))
+
+        self.path_entry = self.tk.Entry(
+            path_row,
+            textvariable=self.game_dir_var,
+            font=("Segoe UI", 10),
+            bg="#313244",
+            fg="#cdd6f4",
+            insertbackground="#cdd6f4",
+            relief="flat",
+            bd=5
+        )
+        self.path_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.path_entry.bind("<FocusOut>", lambda e: self._refresh_status())
+        self.path_entry.bind("<Return>", lambda e: self._refresh_status())
+
+        browse_btn = self.tk.Button(
+            path_row,
+            text="Обзор...",
+            font=("Segoe UI", 9),
+            bg="#45475a",
+            fg="#ffffff",
+            activebackground="#585b70",
+            activeforeground="#ffffff",
+            relief="flat",
+            padx=14,
+            pady=4,
+            cursor="hand2",
+            command=self._on_browse
+        )
+        browse_btn.pack(side="right")
+
+        # Status row
+        status_row = self.tk.Frame(card, bg="#1e1e2e")
+        status_row.pack(fill="x")
+
+        status_prefix = self.tk.Label(
+            status_row,
+            text="Статус клиента: ",
+            font=("Segoe UI", 10, "bold"),
+            fg="#a6adc8",
+            bg="#1e1e2e"
+        )
+        status_prefix.pack(side="left")
+
+        self.status_badge = self.tk.Label(
+            status_row,
+            textvariable=self.status_text_var,
+            font=("Segoe UI", 10, "bold"),
+            fg="#f0b232",
+            bg="#181825",
+            padx=8,
+            pady=2
+        )
+        self.status_badge.pack(side="left")
+
+        # Action Buttons Frame
+        btn_grid = self.tk.Frame(self.root, bg="#181825")
+        btn_grid.pack(fill="x", padx=14, pady=8)
+
+        # 4 Action Buttons in 2x2 grid
+        # 1. 1-Click Restore (Fastest / Native replacement for .bat)
+        self.btn_restore = self.tk.Button(
+            btn_grid,
+            text="⚡  1-Click Восстановление (из кэша)\nМгновенный накат мода после обновления лаунчера (1-2 сек)",
+            font=("Segoe UI", 10, "bold"),
+            bg="#23a55a",
+            fg="#ffffff",
+            activebackground="#2dc96c",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=10,
+            cursor="hand2",
+            justify="center",
+            command=self._on_restore_cache
+        )
+        self.btn_restore.grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="nsew")
+
+        # 2. Full Install / Reinstall
+        self.btn_apply = self.tk.Button(
+            btn_grid,
+            text="🎮  Полная установка / Переустановка\nСоздание бэкапа, адаптация скелетов и полный свап файлов",
+            font=("Segoe UI", 10, "bold"),
+            bg="#5865f2",
+            fg="#ffffff",
+            activebackground="#7289da",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=10,
+            cursor="hand2",
+            justify="center",
+            command=self._on_apply_full
+        )
+        self.btn_apply.grid(row=0, column=1, padx=(6, 0), pady=(0, 6), sticky="nsew")
+
+        # 3. Verify
+        self.btn_verify = self.tk.Button(
+            btn_grid,
+            text="🔍  Проверить целостность\nДиагностика активных файлов, скелетов и исключений",
+            font=("Segoe UI", 9),
+            bg="#313244",
+            fg="#cdd6f4",
+            activebackground="#45475a",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=8,
+            cursor="hand2",
+            justify="center",
+            command=self._on_verify
+        )
+        self.btn_verify.grid(row=1, column=0, padx=(0, 6), pady=(6, 0), sticky="nsew")
+
+        # 4. Rollback
+        self.btn_rollback = self.tk.Button(
+            btn_grid,
+            text="🔄  Откатить к оригиналу\n100% возврат оригинальных файлов игры из _ModBackup",
+            font=("Segoe UI", 9),
+            bg="#da373c",
+            fg="#ffffff",
+            activebackground="#ea4347",
+            activeforeground="#ffffff",
+            relief="flat",
+            bd=0,
+            padx=14,
+            pady=8,
+            cursor="hand2",
+            justify="center",
+            command=self._on_rollback
+        )
+        self.btn_rollback.grid(row=1, column=1, padx=(6, 0), pady=(6, 0), sticky="nsew")
+
+        btn_grid.columnconfigure(0, weight=1)
+        btn_grid.columnconfigure(1, weight=1)
+
+        # Log Section
+        log_frame = self.tk.Frame(self.root, bg="#1e1e2e", padx=16, pady=12)
+        log_frame.pack(fill="both", expand=True, padx=14, pady=(6, 14))
+
+        log_hdr = self.tk.Frame(log_frame, bg="#1e1e2e")
+        log_hdr.pack(fill="x", pady=(0, 6))
+
+        log_title = self.tk.Label(
+            log_hdr,
+            text="Журнал операций:",
+            font=("Segoe UI", 9, "bold"),
+            fg="#a6adc8",
+            bg="#1e1e2e"
+        )
+        log_title.pack(side="left")
+
+        clear_btn = self.tk.Button(
+            log_hdr,
+            text="Очистить",
+            font=("Segoe UI", 8),
+            bg="#313244",
+            fg="#a6adc8",
+            relief="flat",
+            padx=8,
+            pady=1,
+            cursor="hand2",
+            command=self._clear_log
+        )
+        clear_btn.pack(side="right")
+
+        self.log_text = scrolledtext.ScrolledText(
+            log_frame,
+            wrap="word",
+            bg="#11111b",
+            fg="#cdd6f4",
+            insertbackground="#cdd6f4",
+            font=("Consolas", 9),
+            relief="flat",
+            bd=4
+        )
+        self.log_text.pack(fill="both", expand=True)
+
+        self.log_text.tag_config("green", foreground="#a6e3a1")
+        self.log_text.tag_config("yellow", foreground="#f9e2af")
+        self.log_text.tag_config("red", foreground="#f38ba8")
+        self.log_text.tag_config("blue", foreground="#89b4fa")
+
+    def _on_browse(self):
+        chosen = self.filedialog.askdirectory(
+            initialdir=self.game_dir_var.get(),
+            title="Выберите корневую папку с игрой RF Online"
+        )
+        if chosen:
+            self.game_dir_var.set(os.path.abspath(chosen))
+            self._refresh_status()
+
+    def _refresh_status(self):
+        target = self.game_dir_var.get().strip()
+        if not target or not os.path.isdir(target):
+            self.status_text_var.set("❌ ПАПКА НЕ НАЙДЕНА")
+            self.status_badge.configure(fg="#f38ba8")
+            return
+
+        char_dir = os.path.join(target, "Character")
+        if not os.path.exists(char_dir):
+            self.status_text_var.set("⚠️ НЕ RF ONLINE ПАПКА")
+            self.status_badge.configure(fg="#fab387")
+            return
+
+        applied = is_mod_applied(target)
+        if applied:
+            self.status_text_var.set("✅ МОД АКТИВЕН И УСТАНОВЛЕН")
+            self.status_badge.configure(fg="#a6e3a1")
+        else:
+            self.status_text_var.set("🔹 ОРИГИНАЛЬНАЯ ИГРА (БЕЗ МОДА)")
+            self.status_badge.configure(fg="#89b4fa")
+
+    def _clear_log(self):
+        self.log_text.delete("1.0", self.tk.END)
+
+    def _append_log(self, text: str):
+        if not text:
+            return
+        tag = None
+        if "[OK]" in text or "[+]" in text or "SUCCESS" in text:
+            tag = "green"
+        elif "[!]" in text or "Warning" in text:
+            tag = "yellow"
+        elif "[ERROR]" in text or "Error" in text:
+            tag = "red"
+        elif "[*]" in text:
+            tag = "blue"
+
+        if tag:
+            self.log_text.insert(self.tk.END, text, tag)
+        else:
+            self.log_text.insert(self.tk.END, text)
+        self.log_text.see(self.tk.END)
+
+    def _process_log_queue(self):
+        while True:
+            try:
+                line = self.log_queue.get_nowait()
+                self._append_log(line)
+            except queue.Empty:
+                break
+        self.root.after(80, self._process_log_queue)
+
+    def _set_busy(self, busy: bool):
+        self.is_busy = busy
+        state = self.tk.DISABLED if busy else self.tk.NORMAL
+        self.btn_restore.configure(state=state)
+        self.btn_apply.configure(state=state)
+        self.btn_verify.configure(state=state)
+        self.btn_rollback.configure(state=state)
+        self.path_entry.configure(state=state)
+
+    def _run_worker(self, target_fn, action_name: str):
+        if self.is_busy:
+            return
+        self._set_busy(True)
+        self._clear_log()
+        self._append_log(f"=== Запуск: {action_name} ===\n\n")
+
+        def worker():
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            redirector = GuiOutputRedirector(self.log_queue)
+            sys.stdout = redirector
+            sys.stderr = redirector
+            try:
+                target_fn()
+            except Exception as e:
+                import traceback
+                self.log_queue.put(f"\n[ERROR] Исключение во время {action_name}: {e}\n{traceback.format_exc()}\n")
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                self.root.after(0, self._on_worker_done, action_name)
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+
+    def _on_worker_done(self, action_name: str):
+        self._set_busy(False)
+        self._refresh_status()
+        self._append_log(f"\n=== Завершено: {action_name} ===\n")
+
+    def _on_restore_cache(self):
+        target = self.game_dir_var.get().strip()
+        cache_dir = os.path.join(target, "_ModCache")
+        if not os.path.exists(cache_dir):
+            self.messagebox.showwarning(
+                "Кэш не найден",
+                "Папка _ModCache не найдена!\n\nСначала выполните 'Полную установку', чтобы создался кэш модифицированных файлов."
+            )
+            return
+
+        def do_restore():
+            cacher = CacheManager(target)
+            cacher.restore_from_cache()
+            print()
+            verify_installation(target)
+
+        self._run_worker(do_restore, "1-Click Восстановление из кэша")
+
+    def _on_apply_full(self):
+        target = self.game_dir_var.get().strip()
+        if not os.path.isdir(target):
+            self.messagebox.showerror("Ошибка", f"Папка не существует: {target}")
+            return
+
+        def do_apply():
+            backup_mgr = BackupManager(target)
+            swapper = AssetSwapper(target, backup_mgr)
+            cacher = CacheManager(target)
+
+            already_applied = is_mod_applied(target)
+            if already_applied:
+                print("[*] Мод уже был активен. Выполняем откат к оригиналу перед чистой переустановкой...")
+                backup_mgr.rollback()
+
+            print("====================================================================")
+            print(" Начинаем полную установку мода Cora <-> Bellato...")
+            print("====================================================================")
+            stats = swapper.execute_swap()
+            cacher.build_cache_from_active_mod()
+            cacher.generate_apply_scripts()
+            print()
+            verify_installation(target)
+            print("\n[+] УСТАНОВКА УСПЕШНО ЗАВЕРШЕНА!")
+
+        self._run_worker(do_apply, "Полная установка мода")
+
+    def _on_verify(self):
+        target = self.game_dir_var.get().strip()
+        if not os.path.isdir(target):
+            self.messagebox.showerror("Ошибка", f"Папка не существует: {target}")
+            return
+
+        def do_verify():
+            verify_installation(target)
+
+        self._run_worker(do_verify, "Проверка целостности")
+
+    def _on_rollback(self):
+        target = self.game_dir_var.get().strip()
+        if not os.path.isdir(target):
+            self.messagebox.showerror("Ошибка", f"Папка не существует: {target}")
+            return
+
+        ans = self.messagebox.askyesno(
+            "Подтверждение отката",
+            "Вы уверены, что хотите вернуть игру к исходному состоянию?\n\nВсе оригинальные файлы будут восстановлены из _ModBackup."
+        )
+        if not ans:
+            return
+
+        def do_rollback():
+            backup_mgr = BackupManager(target)
+            restored, errors = backup_mgr.rollback()
+            print()
+            verify_installation(target)
+            if not errors:
+                print("\n[+] Игра успешно возвращена в оригинальное состояние!")
+            else:
+                print(f"\n[!] Откат завершен с {len(errors)} предупреждениями.")
+
+        self._run_worker(do_rollback, "Откат к оригиналу")
+
+    def run(self):
+        self.root.mainloop()
+
+
+def launch_gui(initial_dir: Optional[str] = None):
+    gui = PatcherGUI(initial_dir)
+    gui.run()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="RF Online 4.75 Cora <-> Bellato Complete Modification Tool",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--game-dir", "--dir", default=None, help="Path to RF Online game directory (defaults to current folder)")
+    parser.add_argument("--game-dir", "--dir", default=None, help="Path to RF Online game directory (defaults to auto-detected folder)")
+    parser.add_argument("--gui", action="store_true", help="Launch Graphical User Interface (default when run without arguments)")
     parser.add_argument("--apply", action="store_true", help="Apply full Cora <-> Bellato mod (Backup, Swap, DXT1, Cache, Scripts)")
+    parser.add_argument("--restore", action="store_true", help="1-Click restore mod files from _ModCache/ (fastest recovery after launcher update)")
     parser.add_argument("--rollback", action="store_true", help="Completely restore game to pristine state from _ModBackup/")
     parser.add_argument("--verify", action="store_true", help="Verify current mod state and file integrity")
     parser.add_argument("--status", action="store_true", help="Show current installation status")
@@ -2876,10 +3421,15 @@ def main():
 
     args = parser.parse_args()
 
+    # Launch GUI by default if no action flag is provided or if --gui is given
+    if len(sys.argv) == 1 or args.gui:
+        launch_gui(args.game_dir)
+        sys.exit(0)
+
     if args.force:
         args.apply = True
 
-    if not any([args.apply, args.rollback, args.verify, args.status]):
+    if not any([args.apply, args.restore, args.rollback, args.verify, args.status]):
         parser.print_help()
         sys.exit(0)
 
@@ -2891,6 +3441,15 @@ def main():
     if args.status or args.verify:
         is_active = verify_installation(target_dir)
         sys.exit(0 if is_active else 0)
+
+    elif args.restore:
+        restored, errors = cacher.restore_from_cache()
+        if errors:
+            print(f"[!] Restore finished with {len(errors)} warnings.")
+            sys.exit(1)
+        else:
+            print(f"[+] Mod restored successfully from _ModCache ({restored} files).")
+            sys.exit(0)
 
     elif args.rollback:
         restored, errors = backup_mgr.rollback()
@@ -2950,7 +3509,7 @@ def main():
         print(f"    - Charinfo Race Badges:      {stats.get('charinfo_crests', 0)} crest page")
         bat_recovery = os.path.join(target_dir, "Apply-Mod.bat")
         print(f"\n[+] Zero-Downtime Launcher Recovery: {bat_recovery}")
-        print("    Run Apply-Mod.bat anytime after an official Innova launcher patch to restore the mod in 1 second!")
+        print("    Run Apply-Mod.bat or click '1-Click Восстановление' anytime after an official update to restore the mod in 1 second!")
 
 
 if __name__ == "__main__":

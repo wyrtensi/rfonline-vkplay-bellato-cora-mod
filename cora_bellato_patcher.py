@@ -56,7 +56,25 @@ if sys.platform == 'win32':
     except Exception:
         pass
 
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+def get_default_base_dir() -> str:
+    if getattr(sys, 'frozen', False):
+        exe_dir = os.path.abspath(os.path.dirname(sys.executable))
+        if os.path.exists(os.path.join(exe_dir, "Character")):
+            return exe_dir
+        cwd = os.path.abspath(os.getcwd())
+        if os.path.exists(os.path.join(cwd, "Character")):
+            return cwd
+        return exe_dir
+    else:
+        file_dir = os.path.abspath(os.path.dirname(__file__))
+        if os.path.exists(os.path.join(file_dir, "Character")):
+            return file_dir
+        cwd = os.path.abspath(os.getcwd())
+        if os.path.exists(os.path.join(cwd, "Character")):
+            return cwd
+        return file_dir
+
+BASE_DIR = get_default_base_dir()
 BACKUP_DIR = os.path.join(BASE_DIR, "_ModBackup")
 CACHE_DIR = os.path.join(BASE_DIR, "_ModCache")
 BACKUP_MANIFEST = os.path.join(BACKUP_DIR, "backup_manifest.json")
@@ -2929,6 +2947,7 @@ class PatcherGUI:
         self.ttk = ttk
         self.filedialog = filedialog
         self.messagebox = messagebox
+        self.scrolledtext = scrolledtext
 
         self.root = tk.Tk()
         self.root.title("RF Online 4.75 — Модификатор Расы: Cora ⇄ Bellato")
@@ -3196,7 +3215,7 @@ class PatcherGUI:
         )
         clear_btn.pack(side="right")
 
-        self.log_text = scrolledtext.ScrolledText(
+        self.log_text = self.scrolledtext.ScrolledText(
             log_frame,
             wrap="word",
             bg="#11111b",

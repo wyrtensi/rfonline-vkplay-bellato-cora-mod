@@ -1,0 +1,45 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Game binaries, archives, and asset formats (DO NOT COMMIT CLIENT ASSETS)
+*.exe
+*.dll
+*.sys
+*.des
+*.rfs
+*.msh
+*.rft
+*.spr
+*.edf
+*.dat
+*.idx
+*.bbx
+*.bn
+*.eff
+*.spt
+*.mp3
+*.wav
+*.bin
+*.asi
+*.xmf
+
+# Mod runtime cache & backups
+_ModBackup/
+_ModCache/
+_temp_spr/
+scratch/
+NetLog/
+*.log
+
+# Environments & Editor files
+.venv/
+env/
+venv/
+.idea/
+.vscode/
+*.swp
+*.bak
+Thumbs.db
+Desktop.ini

@@ -3009,221 +3009,157 @@ class PatcherGUI:
         return os.path.abspath(candidates[0]) if candidates else os.getcwd()
 
     def _build_ui(self):
-        # Header Frame
-        header = self.tk.Frame(self.root, bg="#1e1e2e", padx=20, pady=16)
-        header.pack(fill="x", padx=14, pady=(14, 8))
+        tk = self.tk
 
-        title_label = self.tk.Label(
-            header,
-            text="RF Online 4.75 — Cora ⇄ Bellato Mod Manager",
-            font=("Segoe UI", 15, "bold"),
-            fg="#cdd6f4",
-            bg="#1e1e2e"
-        )
-        title_label.pack(anchor="w")
+        # ── Main container with padding ──
+        main = tk.Frame(self.root, bg="#181825")
+        main.pack(fill="both", expand=True, padx=16, pady=12)
 
-        sub_label = self.tk.Label(
-            header,
-            text="Полная взаимная замена моделей, брони, анимаций, эффектов, звуков и спрайтов",
-            font=("Segoe UI", 9),
-            fg="#a6adc8",
-            bg="#1e1e2e"
-        )
-        sub_label.pack(anchor="w", pady=(2, 0))
+        # ── Header ──
+        hdr = tk.Frame(main, bg="#181825")
+        hdr.pack(fill="x", pady=(0, 10))
 
-        # Path & Status Card
-        card = self.tk.Frame(self.root, bg="#1e1e2e", padx=20, pady=14)
-        card.pack(fill="x", padx=14, pady=6)
+        tk.Label(
+            hdr, text="Cora / Bellato Mod Manager",
+            font=("Segoe UI", 16, "bold"), fg="#cdd6f4", bg="#181825"
+        ).pack(anchor="w")
+        tk.Label(
+            hdr, text="RF Online 4.75  —  Innova / 4game / VK Play",
+            font=("Segoe UI", 9), fg="#6c7086", bg="#181825"
+        ).pack(anchor="w")
 
-        path_lbl = self.tk.Label(
-            card,
-            text="Папка с игрой RF Online:",
-            font=("Segoe UI", 9, "bold"),
-            fg="#cdd6f4",
-            bg="#1e1e2e"
-        )
-        path_lbl.pack(anchor="w", pady=(0, 4))
+        # ── Path selector ──
+        path_card = tk.Frame(main, bg="#1e1e2e", padx=14, pady=10)
+        path_card.pack(fill="x", pady=(0, 8))
 
-        path_row = self.tk.Frame(card, bg="#1e1e2e")
-        path_row.pack(fill="x", pady=(0, 10))
+        tk.Label(
+            path_card, text="Папка с игрой",
+            font=("Segoe UI", 9), fg="#a6adc8", bg="#1e1e2e"
+        ).pack(anchor="w", pady=(0, 4))
 
-        self.path_entry = self.tk.Entry(
-            path_row,
-            textvariable=self.game_dir_var,
-            font=("Segoe UI", 10),
-            bg="#313244",
-            fg="#cdd6f4",
-            insertbackground="#cdd6f4",
-            relief="flat",
-            bd=5
+        path_row = tk.Frame(path_card, bg="#1e1e2e")
+        path_row.pack(fill="x")
+
+        self.path_entry = tk.Entry(
+            path_row, textvariable=self.game_dir_var,
+            font=("Segoe UI", 10), bg="#313244", fg="#cdd6f4",
+            insertbackground="#cdd6f4", relief="flat", bd=5
         )
         self.path_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.path_entry.bind("<FocusOut>", lambda e: self._refresh_status())
         self.path_entry.bind("<Return>", lambda e: self._refresh_status())
 
-        browse_btn = self.tk.Button(
-            path_row,
-            text="Обзор...",
-            font=("Segoe UI", 9),
-            bg="#45475a",
-            fg="#ffffff",
-            activebackground="#585b70",
-            activeforeground="#ffffff",
-            relief="flat",
-            padx=14,
-            pady=4,
-            cursor="hand2",
-            command=self._on_browse
-        )
-        browse_btn.pack(side="right")
+        tk.Button(
+            path_row, text="Обзор", font=("Segoe UI", 9),
+            bg="#45475a", fg="#cdd6f4", activebackground="#585b70",
+            activeforeground="#ffffff", relief="flat", padx=12, pady=3,
+            cursor="hand2", command=self._on_browse
+        ).pack(side="right")
 
-        # Status row
-        status_row = self.tk.Frame(card, bg="#1e1e2e")
+        # ── Status indicator ──
+        status_card = tk.Frame(main, bg="#1e1e2e", padx=14, pady=8)
+        status_card.pack(fill="x", pady=(0, 10))
+
+        status_row = tk.Frame(status_card, bg="#1e1e2e")
         status_row.pack(fill="x")
 
-        status_prefix = self.tk.Label(
-            status_row,
-            text="Статус клиента: ",
-            font=("Segoe UI", 10, "bold"),
-            fg="#a6adc8",
-            bg="#1e1e2e"
-        )
-        status_prefix.pack(side="left")
+        tk.Label(
+            status_row, text="Статус:",
+            font=("Segoe UI", 9), fg="#6c7086", bg="#1e1e2e"
+        ).pack(side="left")
 
-        self.status_badge = self.tk.Label(
-            status_row,
-            textvariable=self.status_text_var,
-            font=("Segoe UI", 10, "bold"),
-            fg="#f0b232",
-            bg="#181825",
-            padx=8,
-            pady=2
+        self.status_dot = tk.Label(
+            status_row, text="\u25CF", font=("Segoe UI", 10),
+            fg="#f0b232", bg="#1e1e2e"
+        )
+        self.status_dot.pack(side="left", padx=(6, 4))
+
+        self.status_badge = tk.Label(
+            status_row, textvariable=self.status_text_var,
+            font=("Segoe UI", 9, "bold"), fg="#f0b232", bg="#1e1e2e"
         )
         self.status_badge.pack(side="left")
 
-        # Action Buttons Frame
-        btn_grid = self.tk.Frame(self.root, bg="#181825")
-        btn_grid.pack(fill="x", padx=14, pady=8)
-
-        # 4 Action Buttons in 2x2 grid
-        # 1. 1-Click Restore (Fastest / Native replacement for .bat)
-        self.btn_restore = self.tk.Button(
-            btn_grid,
-            text="⚡  1-Click Восстановление (из кэша)\nМгновенный накат мода после обновления лаунчера (1-2 сек)",
-            font=("Segoe UI", 10, "bold"),
-            bg="#23a55a",
-            fg="#ffffff",
-            activebackground="#2dc96c",
-            activeforeground="#ffffff",
-            relief="flat",
-            bd=0,
-            padx=14,
-            pady=10,
-            cursor="hand2",
-            justify="center",
-            command=self._on_restore_cache
+        # ── Primary action ──
+        self.btn_apply = tk.Button(
+            main,
+            text="Установить мод",
+            font=("Segoe UI", 12, "bold"),
+            bg="#5865f2", fg="#ffffff",
+            activebackground="#7289da", activeforeground="#ffffff",
+            relief="flat", bd=0, padx=20, pady=12,
+            cursor="hand2", command=self._on_apply_full
         )
-        self.btn_restore.grid(row=0, column=0, padx=(0, 6), pady=(0, 6), sticky="nsew")
+        self.btn_apply.pack(fill="x", pady=(0, 6), ipady=2)
 
-        # 2. Full Install / Reinstall
-        self.btn_apply = self.tk.Button(
-            btn_grid,
-            text="🎮  Полная установка / Переустановка\nСоздание бэкапа, адаптация скелетов и полный свап файлов",
-            font=("Segoe UI", 10, "bold"),
-            bg="#5865f2",
-            fg="#ffffff",
-            activebackground="#7289da",
-            activeforeground="#ffffff",
-            relief="flat",
-            bd=0,
-            padx=14,
-            pady=10,
-            cursor="hand2",
-            justify="center",
-            command=self._on_apply_full
-        )
-        self.btn_apply.grid(row=0, column=1, padx=(6, 0), pady=(0, 6), sticky="nsew")
+        # ── Secondary actions row ──
+        sec_row = tk.Frame(main, bg="#181825")
+        sec_row.pack(fill="x", pady=(0, 10))
+        sec_row.columnconfigure(0, weight=1)
+        sec_row.columnconfigure(1, weight=1)
+        sec_row.columnconfigure(2, weight=1)
 
-        # 3. Verify
-        self.btn_verify = self.tk.Button(
-            btn_grid,
-            text="🔍  Проверить целостность\nДиагностика активных файлов, скелетов и исключений",
+        self.btn_restore = tk.Button(
+            sec_row,
+            text="Восстановить из кэша",
             font=("Segoe UI", 9),
-            bg="#313244",
-            fg="#cdd6f4",
-            activebackground="#45475a",
-            activeforeground="#ffffff",
-            relief="flat",
-            bd=0,
-            padx=14,
-            pady=8,
-            cursor="hand2",
-            justify="center",
-            command=self._on_verify
+            bg="#23a55a", fg="#ffffff",
+            activebackground="#2dc96c", activeforeground="#ffffff",
+            relief="flat", bd=0, padx=10, pady=8,
+            cursor="hand2", command=self._on_restore_cache
         )
-        self.btn_verify.grid(row=1, column=0, padx=(0, 6), pady=(6, 0), sticky="nsew")
+        self.btn_restore.grid(row=0, column=0, padx=(0, 3), sticky="nsew")
 
-        # 4. Rollback
-        self.btn_rollback = self.tk.Button(
-            btn_grid,
-            text="🔄  Откатить к оригиналу\n100% возврат оригинальных файлов игры из _ModBackup",
+        self.btn_verify = tk.Button(
+            sec_row,
+            text="Проверить целостность",
             font=("Segoe UI", 9),
-            bg="#da373c",
-            fg="#ffffff",
-            activebackground="#ea4347",
-            activeforeground="#ffffff",
-            relief="flat",
-            bd=0,
-            padx=14,
-            pady=8,
-            cursor="hand2",
-            justify="center",
-            command=self._on_rollback
+            bg="#313244", fg="#cdd6f4",
+            activebackground="#45475a", activeforeground="#ffffff",
+            relief="flat", bd=0, padx=10, pady=8,
+            cursor="hand2", command=self._on_verify
         )
-        self.btn_rollback.grid(row=1, column=1, padx=(6, 0), pady=(6, 0), sticky="nsew")
+        self.btn_verify.grid(row=0, column=1, padx=3, sticky="nsew")
 
-        btn_grid.columnconfigure(0, weight=1)
-        btn_grid.columnconfigure(1, weight=1)
-
-        # Log Section
-        log_frame = self.tk.Frame(self.root, bg="#1e1e2e", padx=16, pady=12)
-        log_frame.pack(fill="both", expand=True, padx=14, pady=(6, 14))
-
-        log_hdr = self.tk.Frame(log_frame, bg="#1e1e2e")
-        log_hdr.pack(fill="x", pady=(0, 6))
-
-        log_title = self.tk.Label(
-            log_hdr,
-            text="Журнал операций:",
-            font=("Segoe UI", 9, "bold"),
-            fg="#a6adc8",
-            bg="#1e1e2e"
+        self.btn_rollback = tk.Button(
+            sec_row,
+            text="Откатить к оригиналу",
+            font=("Segoe UI", 9),
+            bg="#45475a", fg="#f38ba8",
+            activebackground="#585b70", activeforeground="#f38ba8",
+            relief="flat", bd=0, padx=10, pady=8,
+            cursor="hand2", command=self._on_rollback
         )
-        log_title.pack(side="left")
+        self.btn_rollback.grid(row=0, column=2, padx=(3, 0), sticky="nsew")
 
-        clear_btn = self.tk.Button(
-            log_hdr,
-            text="Очистить",
-            font=("Segoe UI", 8),
-            bg="#313244",
-            fg="#a6adc8",
-            relief="flat",
-            padx=8,
-            pady=1,
-            cursor="hand2",
-            command=self._clear_log
-        )
-        clear_btn.pack(side="right")
+        # ── Hint under restore button ──
+        tk.Label(
+            main, text="После обновления игры в лаунчере — нажмите «Восстановить из кэша» (1-2 сек)",
+            font=("Segoe UI", 8), fg="#585b70", bg="#181825"
+        ).pack(anchor="w", pady=(0, 6))
+
+        # ── Log section ──
+        log_frame = tk.Frame(main, bg="#1e1e2e", padx=12, pady=8)
+        log_frame.pack(fill="both", expand=True)
+
+        log_hdr = tk.Frame(log_frame, bg="#1e1e2e")
+        log_hdr.pack(fill="x", pady=(0, 4))
+
+        tk.Label(
+            log_hdr, text="Журнал",
+            font=("Segoe UI", 9, "bold"), fg="#6c7086", bg="#1e1e2e"
+        ).pack(side="left")
+
+        tk.Button(
+            log_hdr, text="Очистить", font=("Segoe UI", 8),
+            bg="#1e1e2e", fg="#585b70", relief="flat", bd=0,
+            padx=6, cursor="hand2", command=self._clear_log
+        ).pack(side="right")
 
         self.log_text = self.scrolledtext.ScrolledText(
-            log_frame,
-            wrap="word",
-            bg="#11111b",
-            fg="#cdd6f4",
-            insertbackground="#cdd6f4",
-            font=("Consolas", 9),
-            relief="flat",
-            bd=4
+            log_frame, wrap="word",
+            bg="#11111b", fg="#cdd6f4", insertbackground="#cdd6f4",
+            font=("Consolas", 9), relief="flat", bd=4
         )
         self.log_text.pack(fill="both", expand=True)
 
@@ -3235,7 +3171,7 @@ class PatcherGUI:
     def _on_browse(self):
         chosen = self.filedialog.askdirectory(
             initialdir=self.game_dir_var.get(),
-            title="Выберите корневую папку с игрой RF Online"
+            title="Выберите папку с игрой RF Online"
         )
         if chosen:
             self.game_dir_var.set(os.path.abspath(chosen))
@@ -3244,22 +3180,26 @@ class PatcherGUI:
     def _refresh_status(self):
         target = self.game_dir_var.get().strip()
         if not target or not os.path.isdir(target):
-            self.status_text_var.set("❌ ПАПКА НЕ НАЙДЕНА")
+            self.status_text_var.set("Папка не найдена")
+            self.status_dot.configure(fg="#f38ba8")
             self.status_badge.configure(fg="#f38ba8")
             return
 
         char_dir = os.path.join(target, "Character")
         if not os.path.exists(char_dir):
-            self.status_text_var.set("⚠️ НЕ RF ONLINE ПАПКА")
+            self.status_text_var.set("Не похоже на папку RF Online")
+            self.status_dot.configure(fg="#fab387")
             self.status_badge.configure(fg="#fab387")
             return
 
         applied = is_mod_applied(target)
         if applied:
-            self.status_text_var.set("✅ МОД АКТИВЕН И УСТАНОВЛЕН")
+            self.status_text_var.set("Мод установлен")
+            self.status_dot.configure(fg="#a6e3a1")
             self.status_badge.configure(fg="#a6e3a1")
         else:
-            self.status_text_var.set("🔹 ОРИГИНАЛЬНАЯ ИГРА (БЕЗ МОДА)")
+            self.status_text_var.set("Оригинальная игра")
+            self.status_dot.configure(fg="#89b4fa")
             self.status_badge.configure(fg="#89b4fa")
 
     def _clear_log(self):
